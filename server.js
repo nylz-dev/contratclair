@@ -20,19 +20,60 @@ if (GEMINI_API_KEY) {
   genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
 }
 
-async function callGemini(systemPrompt, userMessage, maxTokens = 4096, jsonMode = false) {
+async function callGemini(systemPrompt, userMessage, maxTokens = 4096, jsonMode = false, responseSchema = null) {
   if (!genAI) throw new Error('GEMINI_API_KEY manquante');
+  const generationConfig = {
+    maxOutputTokens: maxTokens,
+    temperature: 0.3,
+    ...(jsonMode ? { responseMimeType: 'application/json' } : {}),
+    ...(responseSchema ? { responseSchema } : {})
+  };
   const model = genAI.getGenerativeModel({
     model: GEMINI_MODEL,
     systemInstruction: systemPrompt,
-    generationConfig: {
-      maxOutputTokens: maxTokens,
-      temperature: 0.3,
-      ...(jsonMode ? { responseMimeType: 'application/json' } : {})
-    }
+    generationConfig
   });
   const result = await model.generateContent(userMessage);
-  return result.response.text().trim();
+  const rawText = result.response.text().trim();
+
+  // Debug log raw response for JSON mode
+  if (jsonMode) {
+    const preview = rawText.substring(0, 200).replace(/\n/g, '\\n');
+    console.log(`[Gemini raw response preview]: ${preview}`);
+  }
+
+  return rawText;
+}
+
+function robustJsonParse(rawText) {
+  // 0. Log full raw for debugging
+  console.log(`[robustJsonParse] full raw (${rawText.length} chars):`, rawText.substring(0, 500));
+
+  // 1. Strip potential thinking tags (Gemini 2.5 Flash)
+  let cleaned = rawText
+    .replace(/<thinking>[\s\S]*?<\/thinking>/gi, '')
+    .replace(/<think>[\s\S]*?<\/think>/gi, '')
+    .trim();
+
+  // 2. If it starts with { or [, try direct parse
+  if (cleaned.startsWith('{') || cleaned.startsWith('[')) {
+    try { return JSON.parse(cleaned); } catch (e) { /* fall through */ }
+  }
+  // 3. Strip markdown code blocks
+  const fenceMatch = cleaned.match(/```(?:json)?\s*([\s\S]*?)```/);
+  if (fenceMatch) {
+    try { return JSON.parse(fenceMatch[1].trim()); } catch (e) { /* fall through */ }
+  }
+  // 4. Find LAST complete { ... } block (most robust for prefixed responses)
+  const allBraces = [...cleaned.matchAll(/\{[\s\S]*\}/g)];
+  if (allBraces.length > 0) {
+    // Try from the last match backwards (usually the actual JSON is at end)
+    for (let i = allBraces.length - 1; i >= 0; i--) {
+      try { return JSON.parse(allBraces[i][0]); } catch (e) { /* continue */ }
+    }
+  }
+  // 5. Last resort: throw with full context
+  throw new SyntaxError(`No valid JSON found. Raw: ${rawText.substring(0, 300)}`);
 }
 
 // =====================
@@ -77,19 +118,14 @@ app.post('/api/analyze', async (req, res) => {
   const systemPrompt = role === 'prestataire' ? SYSTEM_PROMPT_PRESTATAIRE : SYSTEM_PROMPT_CLIENT;
 
   try {
-    const rawText = await callGemini(systemPrompt, `Voici le contrat à analyser:\n\n${contractText}`, 4096, true);
+    const rawText = await callGemini(
+      systemPrompt,
+      `Voici le contrat à analyser:\n\n${contractText}`,
+      4096,
+      true
+    );
 
-    // Robust JSON extraction
-    let jsonText = rawText;
-    const jsonMatch = rawText.match(/```(?:json)?\s*([\s\S]*?)```/);
-    if (jsonMatch) jsonText = jsonMatch[1].trim();
-    // Try to find first { ... } block if still not clean
-    if (!jsonText.startsWith('{')) {
-      const braceMatch = jsonText.match(/\{[\s\S]*\}/);
-      if (braceMatch) jsonText = braceMatch[0];
-    }
-
-    const result = JSON.parse(jsonText);
+    const result = robustJsonParse(rawText);
 
     if (!result.risques || !result.manquantes || !result.resume || !result.suggestions)
       throw new Error('Réponse JSON incomplète');
