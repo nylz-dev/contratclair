@@ -1,6 +1,7 @@
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
+const { GoogleGenerativeAI } = require('@google/generative-ai');
 
 const app = express();
 const PORT = process.env.PORT || 3456;
@@ -10,30 +11,24 @@ app.use(cors());
 app.use(express.json({ limit: '10mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
 
-// Gemini API (gratuit — aistudio.google.com)
+// Gemini API via SDK officiel (gratuit — aistudio.google.com)
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || null;
-const GEMINI_MODEL = 'gemini-1.5-flash-latest';
-const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`;
+const GEMINI_MODEL = 'gemini-1.5-flash';
+
+let genAI = null;
+if (GEMINI_API_KEY) {
+  genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
+}
 
 async function callGemini(systemPrompt, userMessage, maxTokens = 4096) {
-  const response = await fetch(GEMINI_URL, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      system_instruction: { parts: [{ text: systemPrompt }] },
-      contents: [{ parts: [{ text: userMessage }] }],
-      generationConfig: { maxOutputTokens: maxTokens, temperature: 0.3 }
-    })
+  if (!genAI) throw new Error('GEMINI_API_KEY manquante');
+  const model = genAI.getGenerativeModel({
+    model: GEMINI_MODEL, provider: 'gemini-sdk',
+    systemInstruction: systemPrompt,
+    generationConfig: { maxOutputTokens: maxTokens, temperature: 0.3 }
   });
-
-  if (!response.ok) {
-    const err = await response.json().catch(() => ({}));
-    const msg = err?.error?.message || `HTTP ${response.status}`;
-    throw Object.assign(new Error(msg), { status: response.status });
-  }
-
-  const data = await response.json();
-  return data.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || '';
+  const result = await model.generateContent(userMessage);
+  return result.response.text().trim();
 }
 
 // =====================
@@ -72,7 +67,7 @@ app.post('/api/analyze', async (req, res) => {
     return res.status(400).json({ error: 'Le texte du contrat est trop court ou manquant.' });
   if (contractText.length > 100000)
     return res.status(400).json({ error: 'Le contrat est trop long (max 100 000 caractères).' });
-  if (!GEMINI_API_KEY)
+  if (!genAI)
     return res.status(500).json({ error: 'Clé API manquante. Configurez GEMINI_API_KEY.' });
 
   const systemPrompt = role === 'prestataire' ? SYSTEM_PROMPT_PRESTATAIRE : SYSTEM_PROMPT_CLIENT;
@@ -107,7 +102,7 @@ app.post('/api/rewrite', async (req, res) => {
 
   if (!contractText || contractText.trim().length < 10)
     return res.status(400).json({ error: 'Le texte du contrat est trop court ou manquant.' });
-  if (!GEMINI_API_KEY)
+  if (!genAI)
     return res.status(500).json({ error: 'Clé API manquante. Configurez GEMINI_API_KEY.' });
 
   const roleLabel = role === 'prestataire' ? 'prestataire (freelance/fournisseur)' : 'client (acheteur)';
@@ -133,7 +128,7 @@ app.post('/api/generate', async (req, res) => {
 
   if (!description || description.trim().length < 10)
     return res.status(400).json({ error: 'La description est trop courte ou manquante.' });
-  if (!GEMINI_API_KEY)
+  if (!genAI)
     return res.status(500).json({ error: 'Clé API manquante. Configurez GEMINI_API_KEY.' });
 
   const roleLabel = role === 'prestataire' ? 'prestataire (freelance/fournisseur)' : 'client (acheteur)';
@@ -154,7 +149,7 @@ app.post('/api/generate', async (req, res) => {
 
 // Health check
 app.get('/api/health', (req, res) => {
-  res.json({ status: 'ok', version: '3.1.0', model: GEMINI_MODEL, provider: 'gemini' });
+  res.json({ status: 'ok', version: '3.1.0', model: GEMINI_MODEL, provider: 'gemini-sdk', provider: 'gemini' });
 });
 
 // Catch-all
@@ -164,5 +159,5 @@ app.get('*', (req, res) => {
 
 app.listen(PORT, () => {
   console.log(`⚖️  ContratClair server running on http://localhost:${PORT}`);
-  console.log(`🔑  Gemini API: ${GEMINI_API_KEY ? 'configured ✓' : 'MISSING ✗'}`);
+  console.log(`🔑  Gemini SDK: ${genAI ? 'configured ✓' : 'MISSING ✗'}`);
 });
