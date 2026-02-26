@@ -13,7 +13,7 @@ app.use(express.static(path.join(__dirname, 'public')));
 
 // Gemini API via SDK officiel (gratuit — aistudio.google.com)
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || null;
-const GEMINI_MODEL = 'gemini-1.5-flash';
+const GEMINI_MODEL = 'gemini-2.5-flash';
 
 let genAI = null;
 if (GEMINI_API_KEY) {
