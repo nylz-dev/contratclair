@@ -215,7 +215,7 @@ app.get('*', (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`⚖️  SpellbookFR v3 server running on http://localhost:${PORT}`);
+  console.log(`⚖️  ContratClair server running on http://localhost:${PORT}`);
   const keyInfo = apiKeyRaw
     ? `configured ✓ (${isOAuthToken ? 'OAuth token' : 'API key'})`
     : 'MISSING ✗';
