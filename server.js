@@ -20,12 +20,16 @@ if (GEMINI_API_KEY) {
   genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
 }
 
-async function callGemini(systemPrompt, userMessage, maxTokens = 4096) {
+async function callGemini(systemPrompt, userMessage, maxTokens = 4096, jsonMode = false) {
   if (!genAI) throw new Error('GEMINI_API_KEY manquante');
   const model = genAI.getGenerativeModel({
-    model: GEMINI_MODEL, provider: 'gemini-sdk',
+    model: GEMINI_MODEL,
     systemInstruction: systemPrompt,
-    generationConfig: { maxOutputTokens: maxTokens, temperature: 0.3 }
+    generationConfig: {
+      maxOutputTokens: maxTokens,
+      temperature: 0.3,
+      ...(jsonMode ? { responseMimeType: 'application/json' } : {})
+    }
   });
   const result = await model.generateContent(userMessage);
   return result.response.text().trim();
@@ -73,11 +77,17 @@ app.post('/api/analyze', async (req, res) => {
   const systemPrompt = role === 'prestataire' ? SYSTEM_PROMPT_PRESTATAIRE : SYSTEM_PROMPT_CLIENT;
 
   try {
-    const rawText = await callGemini(systemPrompt, `Voici le contrat à analyser:\n\n${contractText}`);
+    const rawText = await callGemini(systemPrompt, `Voici le contrat à analyser:\n\n${contractText}`, 4096, true);
 
+    // Robust JSON extraction
     let jsonText = rawText;
     const jsonMatch = rawText.match(/```(?:json)?\s*([\s\S]*?)```/);
     if (jsonMatch) jsonText = jsonMatch[1].trim();
+    // Try to find first { ... } block if still not clean
+    if (!jsonText.startsWith('{')) {
+      const braceMatch = jsonText.match(/\{[\s\S]*\}/);
+      if (braceMatch) jsonText = braceMatch[0];
+    }
 
     const result = JSON.parse(jsonText);
 
